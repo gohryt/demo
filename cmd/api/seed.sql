@@ -1,0 +1,73 @@
+INSERT INTO products (sku, name, type, price, currency) VALUES
+    ('STEAM-TOPUP-500',  'Пополнение Steam 500 ₽',         'topup',        500,  'RUB'),
+    ('STEAM-TOPUP-1000', 'Пополнение Steam 1000 ₽',        'topup',        1000, 'RUB'),
+    ('STEAM-TOPUP-2500', 'Пополнение Steam 2500 ₽',        'topup',        2500, 'RUB'),
+    ('KEY-CS2-PRIME',    'CS2 Prime Status ключ',          'key',          1290, 'RUB'),
+    ('KEY-GTA5',         'GTA V ключ активации',           'key',          1990, 'RUB'),
+    ('KEY-EFT',          'Escape from Tarkov ключ',        'key',          3490, 'RUB'),
+    ('SUB-DISCORD-1M',   'Discord Nitro 1 месяц',          'subscription', 399,  'RUB'),
+    ('SUB-YT-3M',        'YouTube Premium 3 месяца',       'subscription', 1490, 'RUB'),
+    ('SUB-SPOTIFY-1M',   'Spotify Premium 1 месяц',        'subscription', 299,  'RUB'),
+    ('GIFT-PSN-1000',    'PlayStation Store карта 1000 ₽', 'giftcard',     1000, 'RUB'),
+    ('GIFT-XBOX-1500',   'Xbox Gift Card 1500 ₽',          'giftcard',     1500, 'RUB'),
+    ('GIFT-ROBLOX-800',  'Roblox 800 Robux',               'giftcard',     890,  'RUB')
+ON CONFLICT (sku) DO NOTHING;
+
+INSERT INTO inventory_keys (sku, code, status) VALUES
+    ('STEAM-TOPUP-500', 'LFXC-TNCS-BPCD', 'available'),
+    ('STEAM-TOPUP-500', 'P3EI-W8UO-9B4K', 'available'),
+    ('STEAM-TOPUP-500', 'FEL3-GUXN-TCCH', 'available'),
+    ('STEAM-TOPUP-500', 'YPLV-QK2Z-IUS5', 'available'),
+    ('STEAM-TOPUP-500', '0K9E-P1FR-BY1U', 'available'),
+    ('STEAM-TOPUP-500', '5LZV-UQ48-RXCZ', 'available'),
+    ('STEAM-TOPUP-500', 'X93K-NYAQ-GEC1', 'available'),
+    ('STEAM-TOPUP-500', 'EIO5-CQT5-35KO', 'available'),
+    ('STEAM-TOPUP-500', 'M58F-GIIR-VJAP', 'available'),
+    ('STEAM-TOPUP-500', 'NU8Y-SWYB-6252', 'available'),
+    ('STEAM-TOPUP-500', 'OODW-CCHF-MBAF', 'available'),
+    ('STEAM-TOPUP-500', 'DNA5-WFJM-NE49', 'available'),
+    ('STEAM-TOPUP-500', 'QRDD-MJ3F-A8TF', 'available'),
+    ('STEAM-TOPUP-500', 'TAT9-5ZJN-G1T2', 'available'),
+    ('STEAM-TOPUP-500', 'LI39-4330-ISMB', 'available'),
+    ('STEAM-TOPUP-500', 'BKJY-8Q79-8NHI', 'available'),
+    ('STEAM-TOPUP-500', 'HHW6-4RX2-DX62', 'available'),
+    ('STEAM-TOPUP-500', '1RG2-L28O-O80G', 'available'),
+    ('STEAM-TOPUP-500', 'EF63-F39X-MTEA', 'available'),
+    ('STEAM-TOPUP-500', '8XS7-P53H-JKIV', 'available'),
+    ('STEAM-TOPUP-1000','JPE6-MQV6-P7ST', 'available'),
+    ('STEAM-TOPUP-1000','SAPG-A2GR-0ULS', 'available'),
+    ('STEAM-TOPUP-1000','T2DU-IJ1S-U16P', 'available'),
+    ('STEAM-TOPUP-1000','WSSY-QTR7-Z57J', 'available'),
+    ('STEAM-TOPUP-2500','U74E-EPCI-CY26', 'available'),
+    ('STEAM-TOPUP-2500','FZXF-58H8-OR93', 'available'),
+    ('STEAM-TOPUP-2500','FPSM-HLZA-TPAL', 'available'),
+    ('STEAM-TOPUP-2500','WSC9-28DJ-B2JE', 'available'),
+    ('KEY-CS2-PRIME',   'P63J-F7UZ-DCYP', 'available'),
+    ('KEY-CS2-PRIME',   'C7W2-D4C5-QMT7', 'available'),
+    ('KEY-CS2-PRIME',   'JESI-DFBH-LK1K', 'available'),
+    ('KEY-CS2-PRIME',   'SGMA-JA0T-GR7D', 'available'),
+    ('KEY-GTA5',        '3PR4-OSY9-M3ZW', 'available'),
+    ('KEY-GTA5',        'OMBE-C0JF-D45Y', 'available'),
+    ('KEY-GTA5',        'KIKQ-FQJ8-9TI8', 'available'),
+    ('KEY-GTA5',        'LMAN-RSHS-AJDO', 'available'),
+    ('KEY-EFT',         'BAKI-VT1X-Z5OL', 'available'),
+    ('KEY-EFT',         '9F0X-B46W-03FS', 'available'),
+    ('KEY-EFT',         'S423-V6YY-IBEM', 'available'),
+    ('KEY-EFT',         'D4UW-WYRA-20ST', 'available'),
+    ('SUB-DISCORD-1M',  'XC0J-CJ0H-09RN', 'available'),
+    ('SUB-DISCORD-1M',  'RY1W-XCFJ-0KUA', 'available'),
+    ('SUB-DISCORD-1M',  'CJYY-YKSQ-QE6H', 'available'),
+    ('SUB-YT-3M',       '97AQ-38QJ-H8HU', 'available'),
+    ('SUB-YT-3M',       'FS8E-3S5Z-I6RA', 'available'),
+    ('SUB-YT-3M',       'ARQK-FML4-A14E', 'available'),
+    ('SUB-SPOTIFY-1M',  '7Z6K-NO9V-MPJB', 'available'),
+    ('SUB-SPOTIFY-1M',  'D4K7-IJSG-N853', 'available'),
+    ('GIFT-PSN-1000',   'W67T-ZB0Q-1XKB', 'available'),
+    ('GIFT-XBOX-1500',  '7EQM-K09J-XKUO', 'available')
+ON CONFLICT (code) DO NOTHING;
+
+UPDATE products p
+SET available_count = (
+    SELECT count(*) FROM inventory_keys k
+    WHERE k.sku = p.sku AND k.status = 'available'
+);

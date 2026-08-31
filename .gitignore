@@ -1,0 +1,6 @@
+/api
+*.exe
+*.test
+*.out
+.idea/
+.vscode/
