@@ -20,15 +20,30 @@ import (
 )
 
 var (
-	testPool *pgxpool.Pool
-	testApp  *app
-	testBase string
+	testPool     *pgxpool.Pool
+	testApp      *app
+	testBase     string
+	workerCancel context.CancelFunc
+	workerDone   chan struct{}
 )
 
 func TestMain(m *testing.M) {
 	ctx := context.Background()
 	dsn := getenv("DATABASE_URL", "postgres://marketplace:marketplace@127.0.0.1:5432/marketplace?sslmode=disable")
-	pool, err := pgxpool.New(ctx, dsn)
+	cfg, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		panic(err)
+	}
+	admin, err := pgxpool.NewWithConfig(ctx, cfg)
+	if err != nil {
+		panic(err)
+	}
+	schema := "test_" + newID("")
+	if _, err = admin.Exec(ctx, `CREATE SCHEMA `+schema); err != nil {
+		panic(err)
+	}
+	cfg.ConnConfig.RuntimeParams["search_path"] = schema
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "db: %v\n", err)
 		os.Exit(1)
@@ -58,8 +73,7 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 	a.selfURL = "http://" + ln.Addr().String()
-	wctx, cancel := context.WithCancel(ctx)
-	go a.runWorker(wctx)
+
 	go func() { _ = fiberApp.Listener(ln, fiber.ListenConfig{DisableStartupMessage: true}) }()
 	time.Sleep(50 * time.Millisecond)
 
@@ -68,9 +82,15 @@ func TestMain(m *testing.M) {
 	testBase = a.selfURL
 
 	code := m.Run()
-	cancel()
-	_ = fiberApp.Shutdown()
+	a.client.CloseIdleConnections()
+	http.DefaultClient.CloseIdleConnections()
+	if err := fiberApp.ShutdownWithTimeout(3 * time.Second); err != nil {
+		fmt.Fprintf(os.Stderr, "shutdown: %v\n", err)
+		code = 1
+	}
 	pool.Close()
+	_, _ = admin.Exec(ctx, `DROP SCHEMA `+schema+` CASCADE`)
+	admin.Close()
 	os.Exit(code)
 }
 
@@ -78,22 +98,47 @@ func reset(t *testing.T) {
 	t.Helper()
 	ctx := context.Background()
 	if err := execSimple(ctx, testPool, `
-		UPDATE inventory_keys SET status = 'available', order_id = NULL, issued_at = NULL;
-		DELETE FROM inventory_keys WHERE code LIKE 'OOS%';
-		DELETE FROM ledger_entries;
-		DELETE FROM payment_events;
-		DELETE FROM orders;
-		UPDATE products p SET available_count = (
-		    SELECT count(*) FROM inventory_keys k WHERE k.sku = p.sku AND k.status = 'available'
-		);
-	`); err != nil {
+  ALTER TABLE ledger_entries DISABLE TRIGGER ledger_immutable;
+  ALTER TABLE order_history DISABLE TRIGGER history_immutable;
+  ALTER TABLE refund_receipts DISABLE TRIGGER receipts_immutable;
+  ALTER TABLE issuer_operations DISABLE TRIGGER issuer_immutable;
+  ALTER TABLE provider_discrepancies DISABLE TRIGGER discrepancies_immutable;
+  TRUNCATE inventory_keys,orders,order_items,payment_events,ledger_entries,issuer_operations,refund_receipts,order_history,provider_calls,provider_discrepancies CASCADE;
+  ALTER TABLE ledger_entries ENABLE TRIGGER ledger_immutable;
+  ALTER TABLE order_history ENABLE TRIGGER history_immutable;
+  ALTER TABLE refund_receipts ENABLE TRIGGER receipts_immutable;
+  ALTER TABLE issuer_operations ENABLE TRIGGER issuer_immutable;
+  ALTER TABLE provider_discrepancies ENABLE TRIGGER discrepancies_immutable;
+  UPDATE provider_settings SET mode='normal',requests_per_minute=10000;
+ `); err != nil {
 		t.Fatal(err)
 	}
-	testApp.issued.Range(func(k, _ any) bool {
-		testApp.issued.Delete(k)
-		return true
-	})
-	testApp.errA, testApp.toA, testApp.errB, testApp.toB = 0, 0, 0, 0
+	seed, _ := sqlFiles.ReadFile("seed.sql")
+	if err := execSimple(ctx, testPool, string(seed)); err != nil {
+		t.Fatal(err)
+	}
+	startTestWorker()
+	t.Cleanup(stopTestWorker)
+}
+
+func startTestWorker() {
+	ctx, cancel := context.WithCancel(context.Background())
+	workerCancel = cancel
+	workerDone = make(chan struct{})
+	go func() { defer close(workerDone); testApp.runWorker(ctx) }()
+}
+func stopTestWorker() {
+	if workerCancel != nil {
+		workerCancel()
+		<-workerDone
+		workerCancel = nil
+	}
+}
+func setMode(t *testing.T, provider, mode string, limit int) {
+	t.Helper()
+	if _, err := testPool.Exec(context.Background(), `UPDATE provider_settings SET mode=$1,requests_per_minute=$2 WHERE provider=$3`, mode, limit, provider); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestHappyPath(t *testing.T) {
@@ -180,7 +225,7 @@ func TestWebhookBeforeOrder(t *testing.T) {
 
 func TestTimeoutSameCode(t *testing.T) {
 	reset(t)
-	testApp.toA = 1
+	setMode(t, "a", "timeout_after_issue", 10000)
 	o := createOrder(t, "STEAM-TOPUP-500", "")
 	pay(t, "evt_to_"+o.ID, o.ID, "paid", o.Amount)
 	got := waitStatus(t, o.ID, "delivered")
@@ -203,7 +248,7 @@ func TestTimeoutSameCode(t *testing.T) {
 
 func TestFallback(t *testing.T) {
 	reset(t)
-	testApp.errA = 1
+	setMode(t, "a", "unavailable", 10000)
 	o := createOrder(t, "STEAM-TOPUP-500", "")
 	pay(t, "evt_fb_"+o.ID, o.ID, "paid", o.Amount)
 	got := waitStatus(t, o.ID, "delivered")

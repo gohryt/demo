@@ -25,7 +25,7 @@ func (a *app) paymentWebhook(c fiber.Ctx) error {
 	if err := json.Unmarshal(c.Body(), &req); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid json"})
 	}
-	if req.EventID == "" || req.OrderID == "" || (req.Status != "paid" && req.Status != "failed") {
+	if req.EventID == "" || req.OrderID == "" || req.Amount <= 0 || req.Currency == "" || (req.Status != "paid" && req.Status != "failed") {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid event"})
 	}
 	occurredAt := time.Now().UTC()
@@ -51,7 +51,7 @@ func (a *app) paymentWebhook(c fiber.Ctx) error {
 	_, err = tx.Exec(ctx, `
 		INSERT INTO payment_events (event_id, order_id, status, amount, currency, occurred_at)
 		VALUES (@event_id, @order_id, @status, @amount, @currency, @occurred_at)
-		ON CONFLICT (event_id) DO UPDATE SET event_id = excluded.event_id
+		ON CONFLICT (event_id) DO NOTHING
 	`, pgx.NamedArgs{
 		"event_id": req.EventID, "order_id": req.OrderID, "status": req.Status,
 		"amount": req.Amount, "currency": req.Currency, "occurred_at": occurredAt,
@@ -61,12 +61,17 @@ func (a *app) paymentWebhook(c fiber.Ctx) error {
 	}
 
 	var appliedAt *time.Time
-	var eventStatus string
+	var eventStatus, storedOrder, storedCurrency string
+	var storedAmount int
+	var storedTime time.Time
 	err = tx.QueryRow(ctx, `
-		SELECT status, applied_at FROM payment_events WHERE event_id = @event_id FOR UPDATE
-	`, pgx.NamedArgs{"event_id": req.EventID}).Scan(&eventStatus, &appliedAt)
+		SELECT status, applied_at, order_id, amount, currency, occurred_at FROM payment_events WHERE event_id = @event_id FOR UPDATE
+	`, pgx.NamedArgs{"event_id": req.EventID}).Scan(&eventStatus, &appliedAt, &storedOrder, &storedAmount, &storedCurrency, &storedTime)
 	if err != nil {
 		return err
+	}
+	if storedOrder != req.OrderID || eventStatus != req.Status || storedAmount != req.Amount || storedCurrency != req.Currency || (req.CreatedAt != "" && !storedTime.Equal(occurredAt)) {
+		return fiber.NewError(409, "event_id reused with different payload")
 	}
 	if appliedAt != nil {
 		if err := tx.Commit(ctx); err != nil {
@@ -86,6 +91,9 @@ func (a *app) paymentWebhook(c fiber.Ctx) error {
 		return err
 	}
 
+	if o.Amount != req.Amount || o.Currency != req.Currency {
+		return fiber.NewError(422, "payment amount or currency mismatch")
+	}
 	woke, err := applyPayment(ctx, tx, o, eventStatus, req.EventID)
 	if err != nil {
 		return err
@@ -133,6 +141,15 @@ func applyPendingPayments(ctx context.Context, tx pgx.Tx, o orderRow) (bool, err
 }
 
 func applyPayment(ctx context.Context, tx pgx.Tx, o orderRow, eventStatus, eventID string) (bool, error) {
+	var amount int
+	var currency string
+	if err := tx.QueryRow(ctx, `SELECT amount,currency FROM payment_events WHERE event_id=$1 AND order_id=$2`, eventID, o.ID).Scan(&amount, &currency); err != nil {
+		return false, err
+	}
+	if amount != o.Amount || currency != o.Currency {
+		_, err := tx.Exec(ctx, `UPDATE payment_events SET applied_at=now(),rejection_reason='amount or currency mismatch' WHERE event_id=$1`, eventID)
+		return false, err
+	}
 	from := o.Status
 	woke := false
 
@@ -151,7 +168,7 @@ func applyPayment(ctx context.Context, tx pgx.Tx, o orderRow, eventStatus, event
 				if _, err := tx.Exec(ctx, `
 					INSERT INTO ledger_entries (order_id, kind, amount, currency)
 					VALUES (@id, 'payment_credit', @amount, @currency)
-					ON CONFLICT (order_id, kind) DO NOTHING
+					ON CONFLICT DO NOTHING
 				`, pgx.NamedArgs{"id": o.ID, "amount": o.Amount, "currency": o.Currency}); err != nil {
 					return false, err
 				}
@@ -177,6 +194,11 @@ func applyPayment(ctx context.Context, tx pgx.Tx, o orderRow, eventStatus, event
 		}
 	}
 
+	if woke || (from == "created" && eventStatus == "failed") {
+		if err := recordHistory(ctx, tx, o.ID, "payment_"+eventStatus); err != nil {
+			return false, err
+		}
+	}
 	_, err := tx.Exec(ctx, `
 		UPDATE payment_events SET applied_at = now() WHERE event_id = @event_id AND applied_at IS NULL
 	`, pgx.NamedArgs{"event_id": eventID})

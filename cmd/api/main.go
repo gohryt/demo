@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
-	"sync"
 	"syscall"
 	"time"
 
@@ -18,21 +17,19 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-//go:embed schema.sql seed.sql seed_load.sql
+//go:embed schema.sql seed.sql seed_load.sql stage2.sql
 var sqlFiles embed.FS
 
 type app struct {
-	pool     *pgxpool.Pool
-	wake     chan struct{}
-	client   *http.Client
-	selfURL  string
-	timeout  time.Duration
-	errA     float64
-	toA      float64
-	errB     float64
-	toB      float64
-	issued   sync.Map
-	reqLocks sync.Map
+	pool    *pgxpool.Pool
+	wake    chan struct{}
+	client  *http.Client
+	selfURL string
+	timeout time.Duration
+	errA    float64
+	toA     float64
+	errB    float64
+	toB     float64
 }
 
 func main() {
@@ -72,7 +69,8 @@ func main() {
 
 	go func() {
 		<-ctx.Done()
-		_ = fiberApp.Shutdown()
+		a.client.CloseIdleConnections()
+		_ = fiberApp.ShutdownWithTimeout(5 * time.Second)
 	}()
 
 	slog.Info("listen", "addr", a.selfURL)
@@ -104,6 +102,9 @@ func (a *app) router() *fiber.App {
 	r.Get("/api/v1/catalog", a.catalog)
 	r.Post("/webhook/payment", a.paymentWebhook)
 	r.Get("/internal/reconciliation", a.reconciliation)
+	r.Get("/internal/queue", a.queueProgress)
+	r.Get("/internal/reports", a.periodReport)
+	r.Put("/stub/providers/:provider", a.configureProvider)
 	r.Post("/internal/orders/:id/retry", a.retryOrder)
 	r.Post("/stub/provider-a/issue", a.stubIssue("a"))
 	r.Post("/stub/provider-b/issue", a.stubIssue("b"))
@@ -135,7 +136,7 @@ type config struct {
 func loadConfig() config {
 	timeout := 2 * time.Second
 	if v := os.Getenv("PROVIDER_TIMEOUT"); v != "" {
-		if d, err := time.ParseDuration(v); err == nil {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
 			timeout = d
 		}
 	}
@@ -170,16 +171,42 @@ func envFloat(key string, def float64) float64 {
 }
 
 func migrate(ctx context.Context, pool *pgxpool.Pool) error {
-	for _, name := range []string{"schema.sql", "seed.sql", "seed_load.sql"} {
-		body, err := sqlFiles.ReadFile(name)
-		if err != nil {
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(81276321)`); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations(version TEXT PRIMARY KEY)`); err != nil {
+		return err
+	}
+	for _, name := range []string{"schema.sql", "seed.sql", "seed_load.sql", "stage2.sql"} {
+		var done bool
+		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=$1)`, name).Scan(&done); err != nil {
 			return err
 		}
-		if err := execSimple(ctx, pool, string(body)); err != nil {
+		if done {
+			continue
+		}
+		body, readErr := sqlFiles.ReadFile(name)
+		if readErr != nil {
+			return readErr
+		}
+		if _, err = tx.Conn().PgConn().Exec(ctx, string(body)).ReadAll(); err != nil {
+			return err
+		}
+		if _, err = tx.Exec(ctx, `INSERT INTO schema_migrations(version) VALUES($1)`, name); err != nil {
 			return err
 		}
 	}
-	return nil
+	if _, err = tx.Exec(ctx, `INSERT INTO order_history(order_id,kind,snapshot)
+ SELECT id,'migration_baseline',order_snapshot(id) FROM orders o
+ WHERE NOT EXISTS(SELECT 1 FROM order_history h WHERE h.order_id=o.id)`); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func execSimple(ctx context.Context, pool *pgxpool.Pool, sql string) error {
